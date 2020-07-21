@@ -1,107 +1,98 @@
-﻿using Autofac;
-using Autofac.Extensions.DependencyInjection;
-using CleanArchitecture.Core.SharedKernel;
-using CleanArchitecture.Infrastructure.Data;
+﻿using Ardalis.ListStartupServices;
+using Autofac;
+using CleanArchitecture.Infrastructure;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Mvc.Controllers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Swashbuckle.AspNetCore.Swagger;
-using System;
-using System.Reflection;
+using Microsoft.OpenApi.Models;
+using Swashbuckle.AspNetCore.SwaggerGen;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace CleanArchitecture.Web
 {
-    public class Startup
-    {
-        public Startup(IConfiguration config)
-        {
-            Configuration = config;
-        }
+	public class Startup
+	{
+		private readonly IWebHostEnvironment _env;
 
-        public IConfiguration Configuration { get; }
+		public Startup(IConfiguration config, IWebHostEnvironment env)
+		{
+			Configuration = config;
+			_env = env;
+		}
 
-        public IServiceProvider ConfigureServices(IServiceCollection services)
-        {
-            services.Configure<CookiePolicyOptions>(options =>
-            {
-                // This lambda determines whether user consent for non-essential cookies is needed for a given request.
-                options.CheckConsentNeeded = context => true;
-                options.MinimumSameSitePolicy = SameSiteMode.None;
-            });
-            // TODO: Add DbContext and IOC
-            string dbName = Guid.NewGuid().ToString();
-            services.AddDbContext<AppDbContext>(options =>
-                options.UseInMemoryDatabase(dbName));
-                //options.UseSqlServer(Configuration.GetConnectionString("DefaultConnection")));
+		public IConfiguration Configuration { get; }
 
-            services.AddMvc()
-                .AddControllersAsServices()
-                .SetCompatibilityVersion(CompatibilityVersion.Version_2_1);
+		public void ConfigureServices(IServiceCollection services)
+		{
+			services.Configure<CookiePolicyOptions>(options =>
+			{
+				options.CheckConsentNeeded = context => true;
+				options.MinimumSameSitePolicy = SameSiteMode.None;
+			});
 
-            services.AddSwaggerGen(c =>
-            {
-                c.SwaggerDoc("v1", new Info { Title = "My API", Version = "v1" });
-            });
+			string connectionString = Configuration.GetConnectionString("SqliteConnection");  //Configuration.GetConnectionString("DefaultConnection");
 
-            return BuildDependencyInjectionProvider(services);
-        }
 
-        private static IServiceProvider BuildDependencyInjectionProvider(IServiceCollection services)
-        {
-            var builder = new ContainerBuilder();
+			services.AddDbContext(connectionString);
 
-            // Populate the container using the service collection
-            builder.Populate(services);
+			services.AddControllersWithViews().AddNewtonsoftJson();
+			services.AddRazorPages();
 
-            // TODO: Add Registry Classes to eliminate reference to Infrastructure
-            Assembly webAssembly = Assembly.GetExecutingAssembly();
-            Assembly coreAssembly = Assembly.GetAssembly(typeof(BaseEntity));
-            Assembly infrastructureAssembly = Assembly.GetAssembly(typeof(EfRepository)); // TODO: Move to Infrastucture Registry
-            builder.RegisterAssemblyTypes(webAssembly, coreAssembly, infrastructureAssembly).AsImplementedInterfaces();
+			services.AddSwaggerGen(c => {
+				c.SwaggerDoc("v1", new OpenApiInfo { Title = "My API", Version = "v1" });
+				c.EnableAnnotations();
+			});
 
-            IContainer applicationContainer = builder.Build();
-            return new AutofacServiceProvider(applicationContainer);
-        }
+			// add list services for diagnostic purposes - see https://github.com/ardalis/AspNetCoreStartupServices
+			services.Configure<ServiceConfig>(config =>
+			{
+				config.Services = new List<ServiceDescriptor>(services);
 
-        public void Configure(IApplicationBuilder app, IHostingEnvironment env, ILoggerFactory loggerFactory)
-        {
-            loggerFactory.AddConsole(Configuration.GetSection("Logging"));
-            loggerFactory.AddDebug();
+				// optional - default path to view services is /listallservices - recommended to choose your own path
+				config.Path = "/listservices";
+			});
+		}
 
-            if (env.IsDevelopment())
-            {
-                app.UseDeveloperExceptionPage();
-            }
-            else
-            {
-                app.UseExceptionHandler("/Home/Error");
-                app.UseHsts();
-            }
+		public void ConfigureContainer(ContainerBuilder builder)
+		{
+			builder.RegisterModule(new DefaultInfrastructureModule(_env.EnvironmentName == "Development"));
+		}
 
-            app.UseHttpsRedirection();
-            app.UseStaticFiles();
-            app.UseCookiePolicy();
 
-            // Enable middleware to serve generated Swagger as a JSON endpoint.
-            app.UseSwagger();
+		public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+		{
+			if (env.EnvironmentName == "Development")
+			{
+				app.UseDeveloperExceptionPage();
+				app.UseShowAllServicesMiddleware();
+			}
+			else
+			{
+				app.UseExceptionHandler("/Home/Error");
+				app.UseHsts();
+			}
+			app.UseRouting();
 
-            // Enable middleware to serve swagger-ui (HTML, JS, CSS, etc.), specifying the Swagger JSON endpoint.
-            app.UseSwaggerUI(c =>
-            {
-                c.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1");
-            });
+			app.UseHttpsRedirection();
+			app.UseStaticFiles();
+			app.UseCookiePolicy();
 
-            app.UseMvc(routes =>
-            {
-                routes.MapRoute(
-                    name: "default",
-                    template: "{controller=Home}/{action=Index}/{id?}");
-            });
-        }
-    }
+			// Enable middleware to serve generated Swagger as a JSON endpoint.
+			app.UseSwagger();
+
+			// Enable middleware to serve swagger-ui (HTML, JS, CSS, etc.), specifying the Swagger JSON endpoint.
+			app.UseSwaggerUI(c => c.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1"));
+
+			app.UseEndpoints(endpoints =>
+			{
+				endpoints.MapDefaultControllerRoute();
+				endpoints.MapRazorPages();
+			});
+		}
+	}
 }
